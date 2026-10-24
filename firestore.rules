@@ -1,0 +1,97 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function isOwnerOfItem(itemId) {
+      return signedIn() && get(/databases/$(database)/documents/items/$(itemId)).data.artistId == request.auth.uid;
+    }
+    function minBid(a) {
+      return a.get('highBid', null) != null ? a.highBid + a.minStep : a.startPrice;
+    }
+
+    // ===== المستخدمون: صاحب الحساب فقط =====
+    match /users/{uid} {
+      allow read, create, update, delete: if signedIn() && request.auth.uid == uid;
+    }
+
+    // ===== بيانات استلام المدفوعات =====
+    // تُقرأ من أي مستخدم مسجّل (يحتاجها المشتري عند الدفع)، وتُكتب من صاحبها فقط
+    match /payInfo/{uid} {
+      allow read: if signedIn();
+      allow write: if signedIn() && request.auth.uid == uid;
+    }
+
+    // ===== الأعمال =====
+    match /items/{itemId} {
+      allow read: if resource.data.isPublished == true
+                  || (signedIn() && resource.data.artistId == request.auth.uid);
+
+      allow create: if signedIn()
+                    && request.resource.data.artistId == request.auth.uid
+                    && request.resource.data.title is string
+                    && request.resource.data.title.size() > 0
+                    && request.resource.data.title.size() <= 200;
+
+      // صاحب العمل يعدّل كل شيء عدا هوية المالك
+      allow update: if signedIn()
+                    && resource.data.artistId == request.auth.uid
+                    && request.resource.data.artistId == resource.data.artistId;
+
+      // أي مستخدم مسجّل يمكنه المزايدة فقط (حقول المزاد المحددة)
+      allow update: if signedIn()
+                    && resource.data.artistId != request.auth.uid
+                    && resource.data.isPublished == true
+                    && resource.data.auction != null
+                    && resource.data.auction.get('closed', false) == false
+                    && request.time < resource.data.auction.endsAt
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['auction'])
+                    && request.resource.data.auction.diff(resource.data.auction).affectedKeys()
+                         .hasOnly(['highBid', 'highBidder', 'highBidderName', 'bids'])
+                    && request.resource.data.auction.highBidder == request.auth.uid
+                    && request.resource.data.auction.highBid >= minBid(resource.data.auction)
+                    && request.resource.data.auction.bids == resource.data.auction.get('bids', 0) + 1;
+
+      allow delete: if signedIn() && resource.data.artistId == request.auth.uid;
+
+      // الملف الأصلي: صاحب العمل أو مشترٍ أكّد الفنان طلبه
+      match /private/{docId} {
+        allow read: if isOwnerOfItem(itemId)
+                    || (signedIn()
+                        && exists(/databases/$(database)/documents/orders/$(itemId + '_' + request.auth.uid))
+                        && get(/databases/$(database)/documents/orders/$(itemId + '_' + request.auth.uid)).data.status == 'confirmed');
+        allow write: if isOwnerOfItem(itemId);
+      }
+    }
+
+    // ===== الطلبات (معرّف الوثيقة = itemId_buyerUid) =====
+    match /orders/{orderId} {
+      allow read: if signedIn()
+                  && (resource.data.buyerId == request.auth.uid || resource.data.sellerId == request.auth.uid);
+
+      allow create: if signedIn()
+                    && request.resource.data.buyerId == request.auth.uid
+                    && orderId == request.resource.data.itemId + '_' + request.auth.uid
+                    && request.resource.data.status == 'pending'
+                    && exists(/databases/$(database)/documents/items/$(request.resource.data.itemId))
+                    && request.resource.data.sellerId == get(/databases/$(database)/documents/items/$(request.resource.data.itemId)).data.artistId
+                    && request.resource.data.sellerId != request.auth.uid
+                    && request.resource.data.amount == get(/databases/$(database)/documents/items/$(request.resource.data.itemId)).data.price;
+
+      // البائع فقط يؤكد أو يرفض
+      allow update: if signedIn()
+                    && resource.data.sellerId == request.auth.uid
+                    && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'confirmedAt'])
+                    && request.resource.data.status in ['confirmed', 'rejected'];
+
+      // المشتري يحذف طلبه المرفوض فقط (ليعيد المحاولة)
+      allow delete: if signedIn()
+                    && resource.data.buyerId == request.auth.uid
+                    && resource.data.status == 'rejected';
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

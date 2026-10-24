@@ -1,0 +1,28 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // الملفات الأصلية: الرفع لصاحبها، والقراءة لصاحبها أو لمشترٍ مؤكَّد
+    match /masters/{uid}/{itemId}/{file} {
+      allow write: if request.auth != null && request.auth.uid == uid
+                   && request.resource.size < 200 * 1024 * 1024;
+      allow delete: if request.auth != null && request.auth.uid == uid;
+      allow read: if request.auth != null
+                  && (request.auth.uid == uid
+                      || (firestore.exists(/databases/(default)/documents/orders/$(itemId + '_' + request.auth.uid))
+                          && firestore.get(/databases/(default)/documents/orders/$(itemId + '_' + request.auth.uid)).data.status == 'confirmed'));
+    }
+
+    // الصور الشخصية: قراءة عامة، وكتابة لصاحبها (صور حتى 2 ميغابايت)
+    match /previews/{uid}/{file} {
+      allow read: if true;
+      allow write: if request.auth != null && request.auth.uid == uid
+                   && request.resource.size < 2 * 1024 * 1024
+                   && request.resource.contentType.matches('image/.*');
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
