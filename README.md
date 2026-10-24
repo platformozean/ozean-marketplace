@@ -2,7 +2,7 @@
 
 منصة لبيع وشراء الأعمال الإبداعية، تجمع الفنانين والمبدعين وعشّاق الفن في مكان واحد.
 
-🌐 **الموقع:** https://tecnexus555.github.io/ozean.com/
+🌐 **الموقع:** https://platformozean.github.io/ozean-marketplace/
 
 ## 🚧 حالة المشروع
 
